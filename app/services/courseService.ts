@@ -6,6 +6,7 @@ import {
   users,
   modules,
   lessons,
+  courseRatings,
   CourseStatus,
 } from "~/db/schema";
 
@@ -22,7 +23,29 @@ export function getCourseById(id: number) {
 }
 
 export function getCourseBySlug(slug: string) {
-  return db.select().from(courses).where(eq(courses.slug, slug)).get();
+  return db
+    .select({
+      id: courses.id,
+      title: courses.title,
+      slug: courses.slug,
+      description: courses.description,
+      salesCopy: courses.salesCopy,
+      instructorId: courses.instructorId,
+      categoryId: courses.categoryId,
+      status: courses.status,
+      coverImageUrl: courses.coverImageUrl,
+      price: courses.price,
+      pppEnabled: courses.pppEnabled,
+      createdAt: courses.createdAt,
+      updatedAt: courses.updatedAt,
+      avgRating: sql<number | null>`AVG(${courseRatings.rating})`,
+      ratingCount: sql<number>`COUNT(${courseRatings.id})`,
+    })
+    .from(courses)
+    .leftJoin(courseRatings, eq(courseRatings.courseId, courses.id))
+    .where(eq(courses.slug, slug))
+    .groupBy(courses.id)
+    .get();
 }
 
 export function getCoursesByInstructor(instructorId: number) {
@@ -70,7 +93,11 @@ export function buildCourseQuery(
     );
   }
 
-  const query = db
+  if (category) {
+    conditions.push(eq(categories.slug, category));
+  }
+
+  const base = db
     .select({
       id: courses.id,
       title: courses.title,
@@ -88,24 +115,25 @@ export function buildCourseQuery(
       instructorName: users.name,
       instructorAvatarUrl: users.avatarUrl,
       categoryName: categories.name,
+      avgRating: sql<number | null>`AVG(${courseRatings.rating})`,
+      ratingCount: sql<number>`COUNT(${courseRatings.id})`,
     })
     .from(courses)
     .innerJoin(users, eq(courses.instructorId, users.id))
-    .innerJoin(categories, eq(courses.categoryId, categories.id));
-
-  if (category) {
-    conditions.push(eq(categories.slug, category));
-  }
+    .innerJoin(categories, eq(courses.categoryId, categories.id))
+    .leftJoin(courseRatings, eq(courseRatings.courseId, courses.id));
 
   const filtered =
-    conditions.length > 0 ? query.where(and(...conditions)) : query;
+    conditions.length > 0 ? base.where(and(...conditions)) : base;
+
+  const grouped = filtered.groupBy(courses.id);
 
   const sorted =
     sortBy === "title"
-      ? filtered.orderBy(courses.title)
+      ? grouped.orderBy(courses.title)
       : sortBy === "oldest"
-        ? filtered.orderBy(courses.createdAt)
-        : filtered.orderBy(sql`${courses.createdAt} DESC`);
+        ? grouped.orderBy(courses.createdAt)
+        : grouped.orderBy(sql`${courses.createdAt} DESC`);
 
   return sorted.limit(limit).offset(offset).all();
 }
@@ -130,11 +158,15 @@ export function getCourseWithDetails(id: number) {
       instructorAvatarUrl: users.avatarUrl,
       instructorBio: users.bio,
       categoryName: categories.name,
+      avgRating: sql<number | null>`AVG(${courseRatings.rating})`,
+      ratingCount: sql<number>`COUNT(${courseRatings.id})`,
     })
     .from(courses)
     .innerJoin(users, eq(courses.instructorId, users.id))
     .innerJoin(categories, eq(courses.categoryId, categories.id))
+    .leftJoin(courseRatings, eq(courseRatings.courseId, courses.id))
     .where(eq(courses.id, id))
+    .groupBy(courses.id)
     .get();
 
   if (!course) return null;

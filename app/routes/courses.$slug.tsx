@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Link, useSearchParams } from "react-router";
 import { toast } from "sonner";
+import { z } from "zod";
 import type { Route } from "./+types/courses.$slug";
 import {
   getCourseBySlug,
@@ -8,6 +9,7 @@ import {
   getLessonCountForCourse,
 } from "~/services/courseService";
 import { isUserEnrolled } from "~/services/enrollmentService";
+import { upsertRating, getUserRating } from "~/services/ratingService";
 import {
   calculateProgress,
   getLessonProgressForCourse,
@@ -15,6 +17,7 @@ import {
 } from "~/services/progressService";
 import { getCurrentUserId } from "~/lib/session";
 import { LessonProgressStatus } from "~/db/schema";
+import { RatingDisplay, RatingInput } from "~/components/rating-stars";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -71,6 +74,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let progress = 0;
   let lessonProgressMap: Record<number, string> = {};
   let nextLessonId: number | null = null;
+  let userRating: number | null = null;
 
   if (currentUserId) {
     enrolled = isUserEnrolled(currentUserId, course.id);
@@ -88,6 +92,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
       const nextLesson = getNextIncompleteLesson(currentUserId, course.id);
       nextLessonId = nextLesson?.id ?? null;
+
+      userRating = getUserRating(currentUserId, course.id);
     }
   }
 
@@ -113,10 +119,38 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     currentUserId,
     pppPrice,
     tierInfo,
+    userRating,
   };
 }
 
-// No action — enrollment is handled via the purchase confirmation page
+const rateSchema = z.object({
+  rating: z.coerce.number().int().min(1).max(5),
+});
+
+export async function action({ request, params }: Route.ActionArgs) {
+  const userId = await getCurrentUserId(request);
+  if (!userId) {
+    throw data("Sign in required", { status: 401 });
+  }
+
+  const course = getCourseBySlug(params.slug);
+  if (!course) {
+    throw data("Course not found", { status: 404 });
+  }
+
+  if (!isUserEnrolled(userId, course.id)) {
+    throw data("Enrollment required", { status: 403 });
+  }
+
+  const formData = await request.formData();
+  const parsed = rateSchema.safeParse({ rating: formData.get("rating") });
+  if (!parsed.success) {
+    throw data("Invalid rating", { status: 400 });
+  }
+
+  upsertRating(userId, course.id, parsed.data.rating);
+  return data({ ok: true });
+}
 
 export function HydrateFallback() {
   return (
@@ -181,6 +215,7 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     currentUserId,
     pppPrice,
     tierInfo,
+    userRating,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -301,7 +336,7 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
         <p className="mb-4 text-lg text-muted-foreground">
           {course.description}
         </p>
-        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <UserAvatar
               name={course.instructorName}
@@ -320,7 +355,18 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
               {formatDuration(totalDuration, true, false, false)} total
             </span>
           )}
+          <RatingDisplay
+            avg={course.avgRating}
+            count={course.ratingCount}
+            size="sm"
+          />
         </div>
+        {enrolled && (
+          <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 px-4 py-3">
+            <span className="text-sm font-medium">Twoja ocena:</span>
+            <RatingInput currentRating={userRating} />
+          </div>
+        )}
       </div>
 
       {/* Two-column: sales copy left, sidebar right */}

@@ -2,12 +2,14 @@ import { Link } from "react-router";
 import type { Route } from "./+types/dashboard";
 import { getUserEnrolledCourses } from "~/services/enrollmentService";
 import { calculateProgress, getCompletedLessonCount, getTotalLessonCount, getNextIncompleteLesson } from "~/services/progressService";
+import { getCourseRatingStats } from "~/services/ratingService";
 import { getCurrentUserId } from "~/lib/session";
 import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
 import { AlertTriangle, BookOpen, CheckCircle2, GraduationCap, PlayCircle } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
+import { RatingDisplay } from "~/components/rating-stars";
 import { data, isRouteErrorResponse } from "react-router";
 
 export function meta() {
@@ -45,6 +47,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       enrollment.courseId
     );
     const isCompleted = enrollment.completedAt !== null;
+    const ratingStats = getCourseRatingStats(enrollment.courseId);
 
     return {
       ...enrollment,
@@ -53,6 +56,8 @@ export async function loader({ request }: Route.LoaderArgs) {
       totalLessons,
       nextLessonId: nextLesson?.id ?? null,
       isCompleted,
+      avgRating: ratingStats.avg,
+      ratingCount: ratingStats.count,
     };
   });
 
@@ -175,6 +180,13 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
                           style={{ width: `${course.progress}%` }}
                         />
                       </div>
+                      <div className="mt-3">
+                        <RatingDisplay
+                          avg={course.avgRating}
+                          count={course.ratingCount}
+                          size="sm"
+                        />
+                      </div>
                     </CardContent>
                     <CardFooter>
                       {course.nextLessonId ? (
@@ -233,13 +245,18 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
                         {course.courseDescription}
                       </p>
                     </CardHeader>
-                    <CardContent className="flex-1">
+                    <CardContent className="flex-1 space-y-2">
                       <div className="flex items-center gap-2 text-sm text-green-600">
                         <CheckCircle2 className="size-4" />
                         <span>
                           Completed — {course.totalLessons} lessons
                         </span>
                       </div>
+                      <RatingDisplay
+                        avg={course.avgRating}
+                        count={course.ratingCount}
+                        size="sm"
+                      />
                     </CardContent>
                     <CardFooter>
                       <Link

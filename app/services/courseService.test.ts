@@ -94,6 +94,37 @@ describe("courseService", () => {
     it("returns undefined for non-existent slug", () => {
       expect(getCourseBySlug("no-such-slug")).toBeUndefined();
     });
+
+    it("returns avgRating=null and ratingCount=0 when no ratings", () => {
+      const found = getCourseBySlug("test-course");
+      expect(found!.avgRating).toBeNull();
+      expect(found!.ratingCount).toBe(0);
+    });
+
+    it("aggregates ratings via LEFT JOIN", () => {
+      const u2 = testDb
+        .insert(schema.users)
+        .values({
+          name: "U2",
+          email: "u2@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      testDb
+        .insert(schema.courseRatings)
+        .values({ userId: base.user.id, courseId: base.course.id, rating: 5 })
+        .run();
+      testDb
+        .insert(schema.courseRatings)
+        .values({ userId: u2.id, courseId: base.course.id, rating: 3 })
+        .run();
+
+      const found = getCourseBySlug("test-course");
+      expect(found!.ratingCount).toBe(2);
+      expect(found!.avgRating).toBeCloseTo(4, 5);
+    });
   });
 
   describe("getAllCourses", () => {
@@ -231,6 +262,34 @@ describe("courseService", () => {
       expect(results[0].title).toBe("Test Course");
       expect(results[0].instructorName).toBe("Test Instructor");
       expect(results[0].categoryName).toBe("Programming");
+      expect(results[0].avgRating).toBeNull();
+      expect(results[0].ratingCount).toBe(0);
+    });
+
+    it("aggregates ratings per course without inflating join rows", () => {
+      const u2 = testDb
+        .insert(schema.users)
+        .values({
+          name: "U2",
+          email: "u2@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      testDb
+        .insert(schema.courseRatings)
+        .values({ userId: base.user.id, courseId: base.course.id, rating: 4 })
+        .run();
+      testDb
+        .insert(schema.courseRatings)
+        .values({ userId: u2.id, courseId: base.course.id, rating: 2 })
+        .run();
+
+      const results = buildCourseQuery(null, null, null, null, 10, 0);
+      expect(results).toHaveLength(1);
+      expect(results[0].ratingCount).toBe(2);
+      expect(results[0].avgRating).toBeCloseTo(3, 5);
     });
 
     it("filters by search term in title", () => {
@@ -328,6 +387,8 @@ describe("courseService", () => {
       expect(result!.title).toBe("Test Course");
       expect(result!.instructorName).toBe("Test Instructor");
       expect(result!.categoryName).toBe("Programming");
+      expect(result!.avgRating).toBeNull();
+      expect(result!.ratingCount).toBe(0);
     });
 
     it("returns empty modules array when course has no modules", () => {
