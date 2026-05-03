@@ -29,6 +29,13 @@
       "when": 1777831070473,
       "tag": "0003_gray_unus",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1777834843511,
+      "tag": "0004_whole_tarantula",
+      "breakpoints": true
     }
   ]
 }

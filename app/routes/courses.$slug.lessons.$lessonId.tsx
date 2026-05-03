@@ -26,7 +26,17 @@ import {
   getBestAttempt,
 } from "~/services/quizService";
 import { computeResult } from "~/services/quizScoringService";
-import { LessonProgressStatus } from "~/db/schema";
+import {
+  createComment,
+  listCommentsForViewer,
+  countCommentsForViewer,
+  softDeleteComment,
+  setCommentStatus,
+  getCommentById,
+  hardDeleteComment,
+} from "~/services/lessonCommentService";
+import { getUserById } from "~/services/userService";
+import { CommentStatus, LessonProgressStatus, UserRole } from "~/db/schema";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
 import {
@@ -55,6 +65,7 @@ import { resolveCountry } from "~/lib/country.server";
 import { checkPppAccess, COUNTRIES } from "~/lib/ppp";
 import { findPurchase } from "~/services/purchaseService";
 import { parseFormData, parseParams } from "~/lib/validation";
+import { LessonComments } from "~/components/lesson-comments";
 
 const lessonParamsSchema = z.object({
   slug: z.string().min(1),
@@ -63,6 +74,17 @@ const lessonParamsSchema = z.object({
 
 const markCompleteSchema = z.object({
   intent: z.literal("mark-complete"),
+});
+
+const COMMENTS_PAGE_SIZE = 25;
+
+const addCommentSchema = z.object({
+  intent: z.literal("add-comment"),
+  content: z.string().trim().min(1).max(2000),
+});
+
+const commentIdSchema = z.object({
+  commentId: z.coerce.number().int().positive(),
 });
 
 export function meta({ data: loaderData }: Route.MetaArgs) {
@@ -191,6 +213,22 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     pppPurchaseCountry = pppResult.purchaseCountry;
   }
 
+  // Determine moderator capability for comments — any Instructor or Admin
+  const currentUser = currentUserId ? getUserById(currentUserId) : null;
+  const isInstructorOrAdmin =
+    currentUser?.role === UserRole.Instructor ||
+    currentUser?.role === UserRole.Admin;
+
+  const cpage = Math.max(
+    1,
+    Number(new URL(request.url).searchParams.get("cpage") ?? 1)
+  );
+  const comments = listCommentsForViewer(lessonId, isInstructorOrAdmin, {
+    limit: COMMENTS_PAGE_SIZE,
+    offset: (cpage - 1) * COMMENTS_PAGE_SIZE,
+  });
+  const commentsTotal = countCommentsForViewer(lessonId, isInstructorOrAdmin);
+
   // Render lesson content from Markdown to HTML server-side
   const contentHtml = lesson.content
     ? await renderMarkdown(lesson.content)
@@ -281,6 +319,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
+    comments,
+    commentsTotal,
+    commentsPage: cpage,
+    commentsPageSize: COMMENTS_PAGE_SIZE,
+    isInstructorOrAdmin,
   };
 }
 
@@ -329,6 +372,110 @@ export async function action({ params, request }: Route.ActionArgs) {
     }
 
     return { quizResult: result };
+  }
+
+  if (intent === "add-comment") {
+    const parsed = addCommentSchema.safeParse({
+      intent,
+      content: formData.get("content"),
+    });
+    if (!parsed.success) {
+      throw data("Invalid comment", { status: 400 });
+    }
+
+    const currentUser = getUserById(currentUserId);
+    const canPost =
+      isUserEnrolled(currentUserId, course.id) ||
+      currentUser?.role === UserRole.Instructor ||
+      currentUser?.role === UserRole.Admin;
+    if (!canPost) {
+      throw data("Enrollment required", { status: 403 });
+    }
+
+    createComment(currentUserId, lessonId, parsed.data.content);
+    return { success: true };
+  }
+
+  if (intent === "delete-comment") {
+    const parsed = commentIdSchema.safeParse({
+      commentId: formData.get("commentId"),
+    });
+    if (!parsed.success) {
+      throw data("Invalid comment id", { status: 400 });
+    }
+
+    const comment = getCommentById(parsed.data.commentId);
+    if (!comment) {
+      throw data("Comment not found", { status: 404 });
+    }
+    if (comment.userId !== currentUserId) {
+      throw data("Not authorized", { status: 403 });
+    }
+    if (comment.lessonId !== lessonId) {
+      throw data("Comment does not belong to this lesson", { status: 400 });
+    }
+
+    softDeleteComment(parsed.data.commentId, currentUserId);
+    return { success: true };
+  }
+
+  if (intent === "hide-comment" || intent === "unhide-comment") {
+    const parsed = commentIdSchema.safeParse({
+      commentId: formData.get("commentId"),
+    });
+    if (!parsed.success) {
+      throw data("Invalid comment id", { status: 400 });
+    }
+
+    const currentUser = getUserById(currentUserId);
+    const isModerator =
+      currentUser?.role === UserRole.Instructor ||
+      currentUser?.role === UserRole.Admin;
+    if (!isModerator) {
+      throw data("Not authorized", { status: 403 });
+    }
+
+    const comment = getCommentById(parsed.data.commentId);
+    if (!comment) {
+      throw data("Comment not found", { status: 404 });
+    }
+    if (comment.lessonId !== lessonId) {
+      throw data("Comment does not belong to this lesson", { status: 400 });
+    }
+
+    setCommentStatus(
+      parsed.data.commentId,
+      intent === "hide-comment" ? CommentStatus.Hidden : CommentStatus.Visible
+    );
+    return { success: true };
+  }
+
+  if (intent === "purge-comment") {
+    const parsed = commentIdSchema.safeParse({
+      commentId: formData.get("commentId"),
+    });
+    if (!parsed.success) {
+      throw data("Invalid comment id", { status: 400 });
+    }
+
+    const currentUser = getUserById(currentUserId);
+    const isModerator =
+      currentUser?.role === UserRole.Instructor ||
+      currentUser?.role === UserRole.Admin;
+    if (!isModerator) {
+      throw data("Not authorized", { status: 403 });
+    }
+
+    const comment = getCommentById(parsed.data.commentId);
+    if (!comment) {
+      throw data("Comment not found", { status: 404 });
+    }
+    if (comment.lessonId !== lessonId) {
+      throw data("Comment does not belong to this lesson", { status: 400 });
+    }
+
+    hardDeleteComment(parsed.data.commentId);
+    return { success: true };
   }
 
   throw data("Invalid action", { status: 400 });
@@ -382,6 +529,11 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
+    comments,
+    commentsTotal,
+    commentsPage,
+    commentsPageSize,
+    isInstructorOrAdmin,
   } = loaderData;
   const [autoplay, toggleAutoplay] = useAutoplay();
   const fetcher = useFetcher({ key: `mark-complete-${lesson.id}` });
@@ -545,6 +697,17 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
               isSubmitting={isSubmittingQuiz}
             />
           )}
+
+          {/* Comments */}
+          <LessonComments
+            comments={comments}
+            total={commentsTotal}
+            page={commentsPage}
+            pageSize={commentsPageSize}
+            currentUserId={currentUserId}
+            canModerate={isInstructorOrAdmin}
+            canPost={enrolled || isInstructorOrAdmin}
+          />
 
           {/* Mark Complete / Up Next */}
           {enrolled && currentUserId && (

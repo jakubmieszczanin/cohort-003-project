@@ -5,6 +5,7 @@ import {
   real,
   uniqueIndex,
   check,
+  index,
 } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
@@ -34,6 +35,11 @@ export enum QuestionType {
 export enum TeamMemberRole {
   Admin = "admin",
   Member = "member",
+}
+
+export enum CommentStatus {
+  Visible = "visible",
+  Hidden = "hidden",
 }
 
 // ─── Tables ───
@@ -272,6 +278,29 @@ export const courseRatings = sqliteTable(
     ),
     check("course_ratings_rating_range", sql`${table.rating} BETWEEN 1 AND 5`),
   ]
+);
+
+export const lessonComments = sqliteTable(
+  "lesson_comments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    lessonId: integer("lesson_id")
+      .notNull()
+      .references(() => lessons.id),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    content: text("content").notNull(),
+    status: text("status")
+      .notNull()
+      .$type<CommentStatus>()
+      .default(CommentStatus.Visible),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    deletedAt: text("deleted_at"),
+  },
+  (table) => [index("lesson_comments_lesson_idx").on(table.lessonId)]
 );
 
 export const videoWatchEvents = sqliteTable("video_watch_events", {
